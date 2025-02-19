@@ -1,103 +1,93 @@
 import { ethers } from "hardhat";
 
+class LiquidityProvider {
+  constructor(tokenAddresses, positionManagerAddress, impersonatedAddress) {
+    this.DAI = tokenAddresses.DAI;
+    this.WETH = tokenAddresses.WETH;
+    this.positionManagerAddress = positionManagerAddress;
+    this.impersonatedAddress = impersonatedAddress;
+    this.signer = null;
+    this.contracts = {};
+  }
+
+  async initialize() {
+    this.signer = await ethers.getImpersonatedSigner(this.impersonatedAddress);
+    this.contracts.dai = await ethers.getContractAt("IERC20", this.DAI);
+    this.contracts.weth = await ethers.getContractAt("IERC20", this.WETH);
+    this.contracts.positionManager = await ethers.getContractAt(
+      "INonfungiblePositionManager",
+      this.positionManagerAddress
+    );
+  }
+
+  async printBalances(description) {
+    const wethBal = await this.contracts.weth.balanceOf(this.impersonatedAddress);
+    const daiBal = await this.contracts.dai.balanceOf(this.impersonatedAddress);
+    console.log(`--------------------------------------------------`);
+    console.log(`Balances ${description}:`);
+    console.log(`  WETH Balance: ${ethers.formatUnits(wethBal, 18)}`);
+    console.log(`  DAI Balance:  ${ethers.formatUnits(daiBal, 18)}`);
+    console.log(`--------------------------------------------------`);
+  }
+
+  async approveTokens(amountDAI, amountWETH) {
+    console.log(`--------------------------------------------------`);
+    console.log("Approving tokens for liquidity...");
+    await Promise.all([
+      this.contracts.dai.connect(this.signer).approve(this.positionManagerAddress, amountDAI),
+      this.contracts.weth.connect(this.signer).approve(this.positionManagerAddress, amountWETH)
+    ]);
+    console.log("Tokens approved.");
+    console.log(`--------------------------------------------------`);
+  }
+
+  async addLiquidity(amountDAI, amountWETH) {
+    const params = {
+      token0: this.DAI,
+      token1: this.WETH,
+      fee: 3000,
+      tickLower: -887220,
+      tickUpper: 887220,
+      amount0Desired: amountDAI,
+      amount1Desired: amountWETH,
+      amount0Min: 0,
+      amount1Min: 0,
+      recipient: this.impersonatedAddress,
+      deadline: Math.floor(Date.now() / 1000) + 60 * 10,
+    };
+
+    const tx = await this.contracts.positionManager.connect(this.signer).mint(params);
+    await tx.wait();
+    console.log(`--------------------------------------------------`);
+    console.log("Liquidity added successfully!");
+    console.log(`Transaction hash: ${tx.hash}`);
+    console.log(`--------------------------------------------------`);
+  }
+}
+
 const main = async () => {
-  // Token addresses
-  const DAI = "0x6B175474E89094C44Da98b954EedeAC495271d0F";
-  const WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
+  const provider = new LiquidityProvider({
+    DAI: "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+    WETH: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+  }, "0xC36442b4a4522E871399CD717aBDD847Ab11FE88", "0xf584f8728b874a6a5c7a8d4d387c9aae9172d621");
 
-  // Uniswap V3 contracts
-  const NonfungiblePositionManagerAddress =
-    "0xC36442b4a4522E871399CD717aBDD847Ab11FE88";
+  try {
+    await provider.initialize();
+    await provider.printBalances("Before Liquidity Addition");
 
-  // Impersonate an account with DAI and WETH
-  const impersonatedAddress = "0xf584f8728b874a6a5c7a8d4d387c9aae9172d621"; // Replace with an address holding DAI and WETH
-  const impersonatedSigner = await ethers.getImpersonatedSigner(
-    impersonatedAddress
-  );
+    const amountDAI = ethers.parseUnits("1000", 18);
+    const amountWETH = ethers.parseUnits("1", 18);
 
-  // Get contract instances
-  const daiContract = await ethers.getContractAt("IERC20", DAI);
-  const wethContract = await ethers.getContractAt("IERC20", WETH);
-  const nonfungiblePositionManager = await ethers.getContractAt(
-    "INonfungiblePositionManager",
-    NonfungiblePositionManagerAddress
-  );
+    await provider.approveTokens(amountDAI, amountWETH);
+    await provider.addLiquidity(amountDAI, amountWETH);
 
-   const wethBal = await wethContract.balanceOf(impersonatedSigner.address);
-   const daiBal = await daiContract.balanceOf(impersonatedSigner.address);
-
-   console.log(
-     "impersonneted acct weth bal before adding liquidity::",
-     ethers.formatUnits(wethBal, 18)
-   );
-
-   console.log(
-     "impersonneted acct dai bal before adding liquidity:",
-     ethers.formatUnits(daiBal, 18)
-   );
-  
-  // Approve tokens for the NonfungiblePositionManager
-  const amountDAI = ethers.parseUnits("1000", 18); // 1000 DAI
-  const amountWETH = ethers.parseUnits("1", 18); // 1 WETH
-
-  console.log("===== Tokens Approving ====")
-
-  await daiContract
-    .connect(impersonatedSigner)
-    .approve(NonfungiblePositionManagerAddress, amountDAI);
-  await wethContract
-    .connect(impersonatedSigner)
-    .approve(NonfungiblePositionManagerAddress, amountWETH);
-
-  console.log("==== Tokens approved =====");
-
-  // Define the pool fee (0.3% fee tier)
-  const fee = 3000;
-
-  // Define the price range for liquidity
-  const tickLower = -887220; // Lower tick for the price range
-  const tickUpper = 887220; // Upper tick for the price range
-
-
-  // Add liquidity to the pool
-  const tx = await nonfungiblePositionManager.connect(impersonatedSigner).mint({
-    token0: DAI,
-    token1: WETH,
-    fee,
-    tickLower,
-    tickUpper,
-    amount0Desired: amountDAI,
-    amount1Desired: amountWETH,
-    amount0Min: 0,
-    amount1Min: 0,
-    recipient: impersonatedSigner.address,
-    deadline: Math.floor(Date.now() / 1000) + 60 * 10, // 10 minutes from now
-  });
-
-  await tx.wait();
-
-  console.log(tx)
-  console.log("Liquidity added successfully!");
-
-  // Log the transaction hash
-  console.log(`Transaction hash: ${tx.hash}`);
-
-   const wethBalAfter = await wethContract.balanceOf(impersonatedSigner.address);
-   const daiBalAfter = await daiContract.balanceOf(impersonatedSigner.address);
-
-   console.log(
-     "impersonneted acct weth bal after adding liquidity::",
-     ethers.formatUnits(wethBalAfter, 18)
-   );
-
-   console.log(
-     "impersonneted acct dai bal after adding liquidity:",
-     ethers.formatUnits(daiBalAfter, 18)
-   );
-  
+    await provider.printBalances("After Liquidity Addition");
+  } catch (error) {
+    console.log(`--------------------------------------------------`);
+    console.error("An error occurred:", error);
+    console.log(`--------------------------------------------------`);
+    process.exitCode = 1;
+  }
 };
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+main();
